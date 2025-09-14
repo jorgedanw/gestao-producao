@@ -1,0 +1,172 @@
+openapi: 3.0.3
+info:
+  title: Gestão de Produção - API
+  version: 0.1.0
+  description: >
+    Contratos iniciais do módulo M2 (listar e criar OPs).
+    NOTA: criação no legado (Microsys) será decidida no M4.
+servers:
+  - url: http://localhost:3000
+paths:
+  /ops:
+    get:
+      summary: Lista OPs
+      description: Lista OPs por filtros de status e datas (janela padrão: prev.início D-7..D+21 OU validade D-7..D+30).
+      parameters:
+        - in: query
+          name: filial
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: status
+          description: Pode repetir (ex.: status=ABERTA&status=ENTRADA_PARCIAL)
+          schema:
+            type: array
+            items: { $ref: '#/components/schemas/StatusOP' }
+          style: form
+          explode: true
+        - in: query
+          name: prevInicioDe
+          schema: { type: string, format: date }
+        - in: query
+          name: prevInicioAte
+          schema: { type: string, format: date }
+        - in: query
+          name: validadeDe
+          schema: { type: string, format: date }
+        - in: query
+          name: validadeAte
+          schema: { type: string, format: date }
+        - in: query
+          name: page
+          schema: { type: integer, default: 1, minimum: 1 }
+        - in: query
+          name: pageSize
+          schema: { type: integer, default: 20, minimum: 1, maximum: 100 }
+        - in: query
+          name: sort
+          schema:
+            type: string
+            enum: [validade, prevInicio, numero]
+            default: validade
+        - in: query
+          name: ordem
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+      responses:
+        '200':
+          description: Lista paginada de OPs
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ListOpsResponse'
+    post:
+      summary: Cria OP no app (não altera legado)
+      description: >
+        Cria registro de OP no banco auxiliar (ou em memória) do app para
+        alimentar painéis. Integração com o legado será definida no M4.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateOpDTO'
+            examples:
+              exemploBasico:
+                value:
+                  descricao: "CLIENTE Z / Pedido: 9801"
+                  setores: ["Perfiladeira", "Serralheria", "Pintura", "Expedição"]
+                  cor: "PRETO BRILHANTE"
+                  tipoEntrega: "Entrega"
+                  observacoes: "Urgente"
+      responses:
+        '201':
+          description: Criado
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateOpResponse'
+components:
+  schemas:
+    StatusOP:
+      type: string
+      enum: [ABERTA, INICIADA, ENTRADA_PARCIAL, FINALIZADA, CANCELADA, OUTRO]
+    SetorNome:
+      type: string
+      enum: [Perfiladeira, Serralheria, Eixo, Pintura, Expedição]
+   OPDatas:
+      type: object
+      properties:
+        emissao: { type: string, format: date }
+        previsaoInicio: { type: string, format: date }
+        previsaoTermino: { type: string, format: date }
+        validade: { type: string, format: date }
+    OPQuantidades:
+      type: object
+      properties:
+        totalHdr: { type: number }
+        produzidasHdr: { type: number }
+        saldoHdr: { type: number }
+        totalItens: { type: number }
+        produzidasItens: { type: number }
+        saldoItens: { type: number }
+    OP:
+      type: object
+      properties:
+        numero: { type: integer }
+        idMicrosys: { type: integer, nullable: true }
+        filial: { type: integer }
+        descricao: { type: string }
+        status: { $ref: '#/components/schemas/StatusOP' }
+        datas: { $ref: '#/components/schemas/OPDatas' }
+        quant: { $ref: '#/components/schemas/OPQuantidades' }
+        cor: { type: string }
+        setoresSelecionados:
+          type: array
+          items: { $ref: '#/components/schemas/SetorNome' }
+        roteiro:
+          type: array
+          items:
+            type: object
+            properties:
+              setor: { $ref: '#/components/schemas/SetorNome' }
+              atividade: { type: string }
+              ordem: { type: integer }
+              concluido: { type: boolean }
+              percentual: { type: number }
+        progressoCalculado: { type: number, minimum: 0, maximum: 100 }
+    ListOpsResponse:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/OP' }
+        meta:
+          type: object
+          properties:
+            page: { type: integer }
+            pageSize: { type: integer }
+            totalItems: { type: integer }
+            totalPages: { type: integer }
+    CreateOpDTO:
+      type: object
+      required: [descricao, setores]
+      properties:
+        descricao: { type: string }
+        setores:
+          type: array
+          items: { $ref: '#/components/schemas/SetorNome' }
+          minItems: 1
+        cor: { type: string }
+        observacoes: { type: string }
+        tipoEntrega:
+          type: string
+          enum: [Retira, Entrega, Instalação]
+    CreateOpResponse:
+      type: object
+      properties:
+        numeroGerado: { type: integer }
+        status:
+          type: string
+          enum: [ABERTA]
