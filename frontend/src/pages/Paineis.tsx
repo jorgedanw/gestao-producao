@@ -1,20 +1,125 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
 import { defaultWindow } from "../lib/date";
 import type { OpDTO } from "../types/op";
 
-/* ---------------------- Status (nomes → códigos) ----------------------- */
+/* -------------------- Combobox de Status (AA/SS) -------------------- */
 const STATUS_OPTIONS = [
-  { name: "ABERTA", codes: ["AA"] },
-  { name: "INICIADA", codes: ["SS"] },
-  { name: "ENTRADA_PARCIAL", codes: ["EP"] },
-  { name: "FINALIZADA", codes: ["FN", "FF", "FC"] },
+  { code: "AA", label: "ABERTA" },
+  { code: "SS", label: "ENTRADA PARCIAL" },
 ] as const;
 
-type StatusName = (typeof STATUS_OPTIONS)[number]["name"];
-const codesFromName = (name: StatusName) =>
-  STATUS_OPTIONS.find((o) => o.name === name)?.codes.join(",") ?? "";
+function MultiStatusSelect({
+  valueCsv,
+  onChangeCsv,
+}: {
+  valueCsv: string;
+  onChangeCsv: (csv: string) => void;
+}) {
+  const selected = new Set(
+    valueCsv
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
 
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const toggle = (code: string) => {
+    const n = new Set(selected);
+    if (n.has(code)) n.delete(code);
+    else n.add(code);
+    onChangeCsv(Array.from(n).join(","));
+  };
+
+  const selectAll = () =>
+    onChangeCsv(STATUS_OPTIONS.map((s) => s.code).join(","));
+  const clearAll = () => onChangeCsv("");
+
+  const allMarked = STATUS_OPTIONS.every((o) => selected.has(o.code));
+  const text =
+    selected.size === 0
+      ? "—"
+      : allMarked
+      ? "Todos"
+      : STATUS_OPTIONS.filter((o) => selected.has(o.code))
+          .map((o) => o.label)
+          .join(", ");
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="input text-left truncate"
+        title={text}
+      >
+        {text}
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-[22rem] max-w-[calc(100vw-3rem)] rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="p-2 max-h-72 overflow-auto">
+            <div className="flex items-center justify-between gap-2 px-1 pb-2">
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                onClick={selectAll}
+              >
+                Selecionar todos
+              </button>
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                onClick={clearAll}
+              >
+                Limpar
+              </button>
+            </div>
+
+            <ul className="space-y-1">
+              {STATUS_OPTIONS.map((opt) => (
+                <li key={opt.code}>
+                  <label className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={selected.has(opt.code)}
+                      onChange={() => toggle(opt.code)}
+                    />
+                    <span className="text-sm text-gray-800">{opt.label}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="flex justify-end gap-2 p-2 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="btn btn-primary px-3 py-1.5"
+            >
+              Aplicar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------- utilidades/kpis ------------------------- */
 const toPct = (n: number) => (Number.isFinite(n) ? `${Math.round(n)}%` : "0%");
 const hojeISO = () => new Date().toISOString().slice(0, 10);
 const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
@@ -48,7 +153,9 @@ export default function Paineis() {
     limit: 200,
   });
 
-  const [statusName, setStatusName] = useState<StatusName>("ABERTA");
+  // Multi-seleção de status (CSV): AA,SS
+  const [statusCsv, setStatusCsv] = useState<string>("AA,SS");
+
   const [auto, setAuto] = useState(false);
   const [ops, setOps] = useState<OpDTO[]>([]);
   const [loading, setLoading] = useState(false);
@@ -62,7 +169,7 @@ export default function Paineis() {
         de: filtros.de,
         ate: filtros.ate,
         filial: filtros.filial,
-        status: codesFromName(statusName),
+        status: statusCsv, // << envia AA/SS conforme seleção
         limit: filtros.limit,
         incluirRoteiro: filtros.incluirRoteiro ? 1 : 0,
       } as any;
@@ -86,7 +193,7 @@ export default function Paineis() {
     const id = setInterval(carregar, 15000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, filtros, statusName]);
+  }, [auto, filtros, statusCsv]);
 
   /* ---------------------------- KPIs ----------------------------------- */
   const kpis = useMemo(() => {
@@ -183,23 +290,12 @@ export default function Paineis() {
           />
         </div>
 
-        {/* Combobox de status */}
+        {/* Combobox multi de status */}
         <div className="lg:col-span-4">
           <label className="label block">Status</label>
-          <select
-            className="select"
-            value={statusName}
-            onChange={(e) => setStatusName(e.target.value as StatusName)}
-            title="Selecione o status"
-          >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.name} value={opt.name}>
-                {opt.name.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
+          <MultiStatusSelect valueCsv={statusCsv} onChangeCsv={setStatusCsv} />
           <div className="text-[11px] text-gray-500 mt-1">
-            Enviando: <code>{codesFromName(statusName)}</code>
+            Enviando: <code>{statusCsv || "—"}</code>
           </div>
         </div>
 
