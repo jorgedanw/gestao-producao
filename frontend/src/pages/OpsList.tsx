@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
-import { defaultWindow } from "../lib/date";
+import { defaultWindow, formatBR } from "../lib/date";
 import type { OP } from "../types/op";
 import { Progress } from "../components/Progress";
 import { StatusTag } from "../components/StatusTag";
@@ -252,10 +252,17 @@ export default function OpsListPage() {
                 {op.cor && <span className="badge bg-purple-100 text-purple-700">Cor: {op.cor}</span>}
               </div>
               <div className="text-sm text-gray-600">
-                Emissão: {op.datas.emissao ?? "-"} • Prev. início: {op.datas.previsaoInicio ?? "-"} • Validade:{" "}
-                {op.datas.validade ?? "-"}
+                Emissão: {formatBR(op.datas.emissao)} • Prev. início: {formatBR(op.datas.previsaoInicio)} • Validade:{" "}
+                {formatBR(op.datas.validade)}
               </div>
             </div>
+
+            {/* Descrição */}
+            {op.descricao && (
+              <p className="mt-2 text-sm text-gray-700">
+                {op.descricao}
+              </p>
+            )}
 
             <div className="mt-3">
               <Progress value={op.progressoCalculado || 0} />
