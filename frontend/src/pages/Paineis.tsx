@@ -1,20 +1,130 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
-import { defaultWindow } from "../lib/date";
+import { defaultWindow, formatBR } from "../lib/date";
 import type { OpDTO } from "../types/op";
+import { Progress } from "../components/Progress";
 
-/* ---------------------- Status (nomes → códigos) ----------------------- */
+/* -------------------- Persistência -------------------- */
+const AUTO_KEY = "gp:autoRefresh";                // '1' | '0'
+const FILTROS_KEY = "gp:paineis:filtros";         // JSON
+
+/* -------------------- Combobox de Status (AA/SS) -------------------- */
 const STATUS_OPTIONS = [
-  { name: "ABERTA", codes: ["AA"] },
-  { name: "INICIADA", codes: ["SS"] },
-  { name: "ENTRADA_PARCIAL", codes: ["EP"] },
-  { name: "FINALIZADA", codes: ["FN", "FF", "FC"] },
+  { code: "AA", label: "ABERTA" },
+  { code: "SS", label: "ENTRADA PARCIAL" },
 ] as const;
 
-type StatusName = (typeof STATUS_OPTIONS)[number]["name"];
-const codesFromName = (name: StatusName) =>
-  STATUS_OPTIONS.find((o) => o.name === name)?.codes.join(",") ?? "";
+function MultiStatusSelect({
+  valueCsv,
+  onChangeCsv,
+}: {
+  valueCsv: string;
+  onChangeCsv: (csv: string) => void;
+}) {
+  const selected = new Set(
+    valueCsv
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  );
 
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (!ref.current) return;
+      if (!ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const toggle = (code: string) => {
+    const n = new Set(selected);
+    if (n.has(code)) n.delete(code);
+    else n.add(code);
+    onChangeCsv(Array.from(n).join(","));
+  };
+
+  const selectAll = () =>
+    onChangeCsv(STATUS_OPTIONS.map((s) => s.code).join(","));
+  const clearAll = () => onChangeCsv("");
+
+  const allMarked = STATUS_OPTIONS.every((o) => selected.has(o.code));
+  const text =
+    selected.size === 0
+      ? "—"
+      : allMarked
+      ? "Todos"
+      : STATUS_OPTIONS.filter((o) => selected.has(o.code))
+          .map((o) => o.label)
+          .join(", ");
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="input text-left truncate"
+        title={text}
+      >
+        {text}
+      </button>
+
+      {open && (
+        <div className="absolute z-20 mt-1 w-[22rem] max-w-[calc(100vw-3rem)] rounded-md border border-gray-200 bg-white shadow-lg">
+          <div className="p-2 max-h-72 overflow-auto">
+            <div className="flex items-center justify-between gap-2 px-1 pb-2">
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                onClick={selectAll}
+              >
+                Selecionar todos
+              </button>
+              <button
+                type="button"
+                className="text-xs px-2 py-1 rounded border border-gray-300 hover:bg-gray-50"
+                onClick={clearAll}
+              >
+                Limpar
+              </button>
+            </div>
+
+            <ul className="space-y-1">
+              {STATUS_OPTIONS.map((opt) => (
+                <li key={opt.code}>
+                  <label className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-50 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4"
+                      checked={selected.has(opt.code)}
+                      onChange={() => toggle(opt.code)}
+                    />
+                    <span className="text-sm text-gray-800">{opt.label}</span>
+                  </label>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="flex justify-end gap-2 p-2 border-t border-gray-200">
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="btn btn-primary px-3 py-1.5"
+            >
+              Aplicar
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------- utilidades/kpis ------------------------- */
 const toPct = (n: number) => (Number.isFinite(n) ? `${Math.round(n)}%` : "0%");
 const hojeISO = () => new Date().toISOString().slice(0, 10);
 const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
@@ -27,6 +137,30 @@ function calcProgress(op: OpDTO): number {
   return (1 - saldo / total) * 100;
 }
 
+function ts(d?: string | null): number {
+  if (!d) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
+function daysUntil(d?: string | null): number | null {
+  if (!d) return null;
+  const target = new Date(d);
+  if (isNaN(+target)) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((+target - +today) / 86400000);
+  return diff;
+}
+
+function deadlineClass(validade?: string | null): string {
+  const days = daysUntil(validade);
+  if (days === null) return "";
+  if (days <= 3) return "border-red-300 bg-red-50";       // destaque forte
+  if (days <= 5) return "border-amber-300 bg-amber-50";   // destaque suave
+  return "";
+}
+
 /* ------------------------------ Tipos ---------------------------------- */
 type Filtros = {
   de: string;
@@ -36,23 +170,76 @@ type Filtros = {
   limit: number;
 };
 
-/* ------------------------------ Página --------------------------------- */
-export default function Paineis() {
+/* ---------------- helpers de persistência ---------------- */
+function loadPersisted(): {
+  filtros: Filtros;
+  statusCsv: string;
+  setorSel: string;
+  auto: boolean;
+} {
   const jan = defaultWindow();
-
-  const [filtros, setFiltros] = useState<Filtros>({
+  let filtros: Filtros = {
     de: jan.de,
     ate: jan.ate,
     filial: 1,
     incluirRoteiro: true,
     limit: 200,
-  });
+  };
+  let statusCsv = "AA,SS";
+  let setorSel = "";
+  try {
+    const raw = localStorage.getItem(FILTROS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      filtros = { ...filtros, ...parsed.filtros };
+      statusCsv = typeof parsed.statusCsv === "string" ? parsed.statusCsv : statusCsv;
+      setorSel = typeof parsed.setorSel === "string" ? parsed.setorSel : setorSel;
+    }
+  } catch {
+    /* ignore */
+  }
+  const auto = localStorage.getItem(AUTO_KEY) !== "0"; // default true
+  return { filtros, statusCsv, setorSel, auto };
+}
 
-  const [statusName, setStatusName] = useState<StatusName>("ABERTA");
-  const [auto, setAuto] = useState(false);
+/* ------------------------------ Página --------------------------------- */
+export default function Paineis() {
+  const persisted = loadPersisted();
+
+  const [filtros, setFiltros] = useState<Filtros>(persisted.filtros);
+
+  // Multi-seleção de status (CSV): AA,SS
+  const [statusCsv, setStatusCsv] = useState<string>(persisted.statusCsv);
+
+  // Filtro por setor (derivado do resultado): '' = Todos
+  const [setorSel, setSetorSel] = useState<string>(persisted.setorSel);
+
+  // Auto-refresh 15s com persistência
+  const [auto, setAuto] = useState<boolean>(persisted.auto);
+
   const [ops, setOps] = useState<OpDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // persistir mudanças relevantes
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        FILTROS_KEY,
+        JSON.stringify({ filtros, statusCsv, setorSel })
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [filtros, statusCsv, setorSel]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_KEY, auto ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [auto]);
 
   async function carregar() {
     try {
@@ -62,7 +249,7 @@ export default function Paineis() {
         de: filtros.de,
         ate: filtros.ate,
         filial: filtros.filial,
-        status: codesFromName(statusName),
+        status: statusCsv,
         limit: filtros.limit,
         incluirRoteiro: filtros.incluirRoteiro ? 1 : 0,
       } as any;
@@ -86,7 +273,7 @@ export default function Paineis() {
     const id = setInterval(carregar, 15000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, filtros, statusName]);
+  }, [auto, filtros, statusCsv, setorSel]);
 
   /* ---------------------------- KPIs ----------------------------------- */
   const kpis = useMemo(() => {
@@ -132,6 +319,62 @@ export default function Paineis() {
 
   const maxSetor = Math.max(1, ...kpis.porSetor.map((x) => x.qtde));
   const maxStatus = Math.max(1, ...kpis.porStatus.map((x) => x.qtde));
+
+  /* --------- Painel por Setor (derivado do resultado atual) ------------ */
+  const setoresDerivados = useMemo(() => {
+    const all = new Set<string>();
+    ops.forEach((op) => {
+      const s1 = op.setoresSelecionados ?? [];
+      const s2 = (op.roteiro ?? []).map((r) => r.setor);
+      [...s1, ...s2].forEach((s) => {
+        if (s && typeof s === "string") all.add(s.trim());
+      });
+    });
+    return Array.from(all).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ops]);
+
+  const possuiSetor = (op: OpDTO, setor: string) => {
+    if (!setor) return true; // Todos
+    const alvo = setor.toLowerCase();
+    const s1 = (op.setoresSelecionados ?? []).some(
+      (s) => s?.toLowerCase() === alvo
+    );
+    const s2 = (op.roteiro ?? []).some((r) => r.setor?.toLowerCase() === alvo);
+    return s1 || s2;
+  };
+
+  const opsFiltradas = useMemo(
+    () => ops.filter((op) => possuiSetor(op, setorSel)),
+    [ops, setorSel]
+  );
+
+  // listas, sempre ordenadas por validade (asc)
+  const byVal = (a: OpDTO, b: OpDTO) =>
+    ts(a.datas?.validade) - ts(b.datas?.validade);
+
+  const filaAbertas = useMemo(
+    () =>
+      opsFiltradas
+        .filter(
+          (op) =>
+            (op.status ?? "").toString().toUpperCase().includes("ABERTA") ||
+            (op.status ?? "") === "AA"
+        )
+        .sort(byVal),
+    [opsFiltradas]
+  );
+
+  const emExecucao = useMemo(
+    () =>
+      opsFiltradas
+        .filter(
+          (op) =>
+            (op.status ?? "").toString().toUpperCase().includes("ENTRADA") ||
+            (op.status ?? "") === "SS"
+        )
+        .sort(byVal),
+    [opsFiltradas]
+  );
 
   /* ----------------------------- Render -------------------------------- */
   return (
@@ -183,23 +426,12 @@ export default function Paineis() {
           />
         </div>
 
-        {/* Combobox de status */}
+        {/* Combobox multi de status */}
         <div className="lg:col-span-4">
           <label className="label block">Status</label>
-          <select
-            className="select"
-            value={statusName}
-            onChange={(e) => setStatusName(e.target.value as StatusName)}
-            title="Selecione o status"
-          >
-            {STATUS_OPTIONS.map((opt) => (
-              <option key={opt.name} value={opt.name}>
-                {opt.name.replace(/_/g, " ")}
-              </option>
-            ))}
-          </select>
+          <MultiStatusSelect valueCsv={statusCsv} onChangeCsv={setStatusCsv} />
           <div className="text-[11px] text-gray-500 mt-1">
-            Enviando: <code>{codesFromName(statusName)}</code>
+            Enviando: <code>{statusCsv || "—"}</code>
           </div>
         </div>
 
@@ -263,49 +495,122 @@ export default function Paineis() {
         />
       </div>
 
-      {/* Barras por Status */}
-      <section className="bg-white rounded-xl border p-4">
-        <h3 className="font-medium mb-3">Distribuição por Status</h3>
-        <div className="space-y-2">
-          {kpis.porStatus.map((row) => (
-            <div key={row.status} className="flex items-center gap-3">
-              <div className="w-40 text-sm text-gray-700">{row.status}</div>
-              <div className="flex-1 h-3 bg-slate-100 rounded">
-                <div
-                  className="h-3 rounded bg-blue-600"
-                  style={{ width: `${(row.qtde / maxStatus) * 100}%` }}
-                  title={`${row.qtde} OPs`}
-                />
-              </div>
-              <div className="w-10 text-right text-sm">{row.qtde}</div>
-            </div>
-          ))}
-          {!kpis.porStatus.length && (
-            <div className="text-sm text-gray-500">Sem dados.</div>
-          )}
+      {/* Painel por Setor */}
+      <section className="bg-white rounded-xl border p-4 space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="font-medium">Painel por Setor</h3>
+            <p className="text-xs text-gray-500">
+              Filtra com base no roteiro/setores selecionados das OPs retornadas.
+            </p>
+          </div>
+          <div className="w-full sm:w-80">
+            <label className="label">Setor</label>
+            <select
+              className="select"
+              value={setorSel}
+              onChange={(e) => setSetorSel(e.target.value)}
+            >
+              <option value="">Todos</option>
+              {setoresDerivados.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      </section>
 
-      {/* Barras por Setor */}
-      <section className="bg-white rounded-xl border p-4">
-        <h3 className="font-medium mb-3">Participação por Setor</h3>
-        <div className="space-y-2">
-          {kpis.porSetor.map((row) => (
-            <div key={row.setor} className="flex items-center gap-3">
-              <div className="w-40 text-sm text-gray-700">{row.setor}</div>
-              <div className="flex-1 h-3 bg-slate-100 rounded">
-                <div
-                  className="h-3 rounded bg-emerald-600"
-                  style={{ width: `${(row.qtde / maxSetor) * 100}%` }}
-                  title={`${row.qtde} OPs`}
-                />
-              </div>
-              <div className="w-10 text-right text-sm">{row.qtde}</div>
+        <div className="grid lg:grid-cols-2 gap-4">
+          {/* Fila - ABERTAS */}
+          <div className="rounded-xl border p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Fila (ABERTAS)</h4>
+              <span className="text-xs text-gray-500">{filaAbertas.length} OPs</span>
             </div>
-          ))}
-          {!kpis.porSetor.length && (
-            <div className="text-sm text-gray-500">Sem dados.</div>
-          )}
+            <div className="space-y-3">
+              {filaAbertas.map((op) => {
+                const hl = deadlineClass(op.datas?.validade);
+                return (
+                  <article key={op.numero} className={`rounded border p-3 ${hl}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          OP {op.numero}
+                          {op.descricao ? (
+                            <span
+                              className="ml-2 text-xs text-gray-600 max-w-[28rem] truncate inline-block align-middle"
+                              title={op.descricao}
+                            >
+                              {op.descricao}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Emissão: {formatBR(op.datas?.emissao)} • Prev. início:{" "}
+                          {formatBR(op.datas?.previsaoInicio)} • Validade:{" "}
+                          {formatBR(op.datas?.validade)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <Progress value={calcProgress(op)} />
+                    </div>
+                  </article>
+                );
+              })}
+              {!filaAbertas.length && (
+                <p className="text-sm text-gray-500">Sem OPs abertas para este setor.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Em execução - ENTRADA PARCIAL */}
+          <div className="rounded-xl border p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Em execução (ENTRADA PARCIAL)</h4>
+              <span className="text-xs text-gray-500">{emExecucao.length} OPs</span>
+            </div>
+            <div className="space-y-3">
+              {emExecucao.map((op) => {
+                const hl = deadlineClass(op.datas?.validade);
+                return (
+                  <article key={op.numero} className={`rounded border p-3 ${hl}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          OP {op.numero}
+                          {op.descricao ? (
+                            <span
+                              className="ml-2 text-xs text-gray-600 max-w-[28rem] truncate inline-block align-middle"
+                              title={op.descricao}
+                            >
+                              {op.descricao}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Emissão: {formatBR(op.datas?.emissao)} • Prev. início:{" "}
+                          {formatBR(op.datas?.previsaoInicio)} • Validade:{" "}
+                          {formatBR(op.datas?.validade)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <Progress value={calcProgress(op)} />
+                    </div>
+                  </article>
+                );
+              })}
+              {!emExecucao.length && (
+                <p className="text-sm text-gray-500">Sem OPs em execução para este setor.</p>
+              )}
+            </div>
+          </div>
         </div>
       </section>
 
@@ -318,6 +623,7 @@ export default function Paineis() {
               <thead>
                 <tr className="text-left text-gray-500">
                   <th className="py-2 pr-4">OP</th>
+                  <th className="py-2 pr-4">Descrição</th>
                   <th className="py-2 pr-4">Status</th>
                   <th className="py-2 pr-4">Validade</th>
                   <th className="py-2 pr-4">Progresso</th>
@@ -328,8 +634,14 @@ export default function Paineis() {
                 {kpis.atrasadas.map((op) => (
                   <tr key={op.numero} className="border-t">
                     <td className="py-2 pr-4 font-medium">OP {op.numero}</td>
+                    <td
+                      className="py-2 pr-4 max-w-[26rem] truncate"
+                      title={op.descricao ?? ""}
+                    >
+                      {op.descricao ?? "—"}
+                    </td>
                     <td className="py-2 pr-4">{op.status ?? "—"}</td>
-                    <td className="py-2 pr-4">{op.datas?.validade ?? "—"}</td>
+                    <td className="py-2 pr-4">{formatBR(op.datas?.validade)}</td>
                     <td className="py-2 pr-4">{toPct(calcProgress(op))}</td>
                     <td className="py-2 pr-4">
                       {(op.setoresSelecionados?.length
