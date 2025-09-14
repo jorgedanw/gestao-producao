@@ -10,6 +10,16 @@ export type StatusOP =
   | "CANCELADA"
   | "OUTRO";
 
+/** Array com os valores permitidos (útil para validação/UI) */
+export const STATUS_OP_VALUES: StatusOP[] = [
+  "ABERTA",
+  "INICIADA",
+  "ENTRADA_PARCIAL",
+  "FINALIZADA",
+  "CANCELADA",
+  "OUTRO",
+];
+
 /** Códigos que podem vir do Microsys/legado (tabelas Firebird) */
 export type StatusLegacy = "AA" | "IN" | "EP" | "SS" | "FF" | "CC" | string;
 
