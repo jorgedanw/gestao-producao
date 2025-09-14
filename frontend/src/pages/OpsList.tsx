@@ -1,9 +1,10 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
 import { defaultWindow, formatBR } from "../lib/date";
 import type { OP } from "../types/op";
 import { Progress } from "../components/Progress";
 import { StatusTag } from "../components/StatusTag";
+import { useAutoRefresh } from "../lib/autoRefresh";
 
 /** ---------------------- Multi select de Status (AA/SS) ---------------------- */
 const STATUS_OPTIONS = [
@@ -120,6 +121,22 @@ function MultiStatusSelect({
   );
 }
 
+/** ---------------------- helpers de data / destaque ---------------------- */
+function daysUntil(dateStr?: string | null): number | null {
+  if (!dateStr) return null;
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date();
+  d.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.ceil((d.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+  return diff;
+}
+function validadeSortValue(dateStr?: string | null): number {
+  const t = dateStr ? new Date(dateStr).getTime() : NaN;
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
 /** ----------------------------- Página ------------------------------ */
 export default function OpsListPage() {
   const w = defaultWindow();
@@ -128,9 +145,9 @@ export default function OpsListPage() {
   const [de, setDe] = useState(w.de);
   const [ate, setAte] = useState(w.ate);
   const [filial, setFilial] = useState(1);
-  const [status, setStatus] = useState<string>("AA,SS"); // default: ABERTA + ENTRADA PARCIAL
+  const [status, setStatus] = useState<string>("AA,SS"); // ABERTA + ENTRADA PARCIAL
   const [incluirRoteiro, setIncluirRoteiro] = useState(true);
-  const [limit, setLimit] = useState(50);
+  const [limit, setLimit] = useState(100);
 
   // Dados
   const [ops, setOps] = useState<OP[]>([]);
@@ -155,17 +172,33 @@ export default function OpsListPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-refresh compartilhado
+  const refresh = useCallback(load, [de, ate, filial, status, incluirRoteiro, limit]);
+  const { auto, setAuto } = useAutoRefresh(refresh, [de, ate, filial, status, incluirRoteiro, limit], 15000);
+
   const totalOps = ops.length;
   const mediaProgresso = useMemo(() => {
     if (!ops.length) return 0;
     return Math.round(ops.reduce((acc, o) => acc + (o.progressoCalculado ?? 0), 0) / ops.length);
   }, [ops]);
 
+  /** Ordena por validade (asc) */
+  const opsOrdenadas = useMemo(
+    () => [...ops].sort((a, b) => validadeSortValue(a.datas?.validade) - validadeSortValue(b.datas?.validade)),
+    [ops]
+  );
+
   return (
     <div className="container-page py-6 space-y-6">
       <header className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Lista de OPs</h1>
+          <div className="flex items-center gap-4">
+            <h1 className="text-2xl font-semibold">Lista de OPs</h1>
+            <label className="text-sm inline-flex items-center gap-2">
+              <input type="checkbox" checked={auto} onChange={(e) => setAuto(e.target.checked)} />
+              Auto-atualizar (15s)
+            </label>
+          </div>
           <p className="text-gray-600 text-sm">
             Consome o endpoint <code>/integracao/ops-param</code>.
           </p>
@@ -241,65 +274,80 @@ export default function OpsListPage() {
         {erro && <p className="text-red-600 mt-3">{erro}</p>}
       </section>
 
-      {/* Lista */}
+      {/* Lista (ordenada por validade, com destaques suaves/fortes) */}
       <section className="grid gap-4">
-        {ops.map((op) => (
-          <article key={op.numero} className="card p-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-3">
-                <span className="text-lg font-semibold">OP {op.numero}</span>
-                <StatusTag status={op.status} />
-                {op.cor && <span className="badge bg-purple-100 text-purple-700">Cor: {op.cor}</span>}
-              </div>
-              <div className="text-sm text-gray-600">
-                Emissão: {formatBR(op.datas.emissao)} • Prev. início: {formatBR(op.datas.previsaoInicio)} • Validade:{" "}
-                {formatBR(op.datas.validade)}
-              </div>
-            </div>
+        {opsOrdenadas.map((op) => {
+          const dleft = daysUntil(op.datas?.validade);
+          const cardTone =
+            dleft !== null && dleft <= 3
+              ? " border-red-300 bg-red-50/40"
+              : dleft !== null && dleft <= 5
+              ? " border-amber-300 bg-amber-50/40"
+              : "";
+          const validadeTone =
+            dleft !== null && dleft <= 3
+              ? "text-red-700 font-medium"
+              : dleft !== null && dleft <= 5
+              ? "text-amber-700 font-medium"
+              : "text-gray-600";
 
-            {/* Descrição */}
-            {op.descricao && (
-              <p className="mt-2 text-sm text-gray-700">
-                {op.descricao}
-              </p>
-            )}
+          return (
+            <article key={op.numero} className={`card p-4${cardTone}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-3">
+                  <span className="text-lg font-semibold">OP {op.numero}</span>
+                  <StatusTag status={op.status} />
+                  {op.cor && <span className="badge bg-purple-100 text-purple-700">Cor: {op.cor}</span>}
+                </div>
 
-            <div className="mt-3">
-              <Progress value={op.progressoCalculado || 0} />
-              <div className="text-xs text-gray-600 mt-1">
-                Progresso: <strong>{Math.round(op.progressoCalculado || 0)}%</strong>
-                {op.quant.totalItens !== undefined && (
-                  <> • Itens: {op.quant.produzidasItens ?? 0}/{op.quant.totalItens}</>
-                )}
-              </div>
-            </div>
-
-            {op.setoresSelecionados.length > 0 && (
-              <div className="mt-3 flex flex-wrap gap-2">
-                {op.setoresSelecionados.map((s, i) => (
-                  <span key={s + i} className="badge bg-gray-100 text-gray-700">
-                    {s}
+                <div className="text-sm text-gray-600">
+                  Emissão: {formatBR(op.datas.emissao)} • Prev. início: {formatBR(op.datas.previsaoInicio)} •{" "}
+                  <span className={validadeTone}>
+                    Validade: {formatBR(op.datas.validade)}
+                    {dleft !== null && <span className="ml-1">({dleft}d)</span>}
                   </span>
-                ))}
+                </div>
               </div>
-            )}
 
-            {incluirRoteiro && op.roteiro.length > 0 && (
-              <details className="mt-3">
-                <summary className="cursor-pointer text-sm text-blue-600">Ver roteiro (ordem)</summary>
-                <ol className="mt-2 list-decimal ml-6 text-sm">
-                  {op.roteiro.map((r, i) => (
-                    <li key={i}>
-                      {r.setor} {r.ordem ? `(ordem ${r.ordem})` : ""}
-                    </li>
+              {op.descricao && <p className="mt-2 text-sm text-gray-700">{op.descricao}</p>}
+
+              <div className="mt-3">
+                <Progress value={op.progressoCalculado || 0} />
+                <div className="text-xs text-gray-600 mt-1">
+                  Progresso: <strong>{Math.round(op.progressoCalculado || 0)}%</strong>
+                  {op.quant.totalItens !== undefined && (
+                    <> • Itens: {op.quant.produzidasItens ?? 0}/{op.quant.totalItens}</>
+                  )}
+                </div>
+              </div>
+
+              {op.setoresSelecionados.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {op.setoresSelecionados.map((s, i) => (
+                    <span key={s + i} className="badge bg-gray-100 text-gray-700">
+                      {s}
+                    </span>
                   ))}
-                </ol>
-              </details>
-            )}
-          </article>
-        ))}
+                </div>
+              )}
 
-        {!loading && ops.length === 0 && (
+              {incluirRoteiro && op.roteiro.length > 0 && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-sm text-blue-600">Ver roteiro (ordem)</summary>
+                  <ol className="mt-2 list-decimal ml-6 text-sm">
+                    {op.roteiro.map((r, i) => (
+                      <li key={i}>
+                        {r.setor} {r.ordem ? `(ordem ${r.ordem})` : ""}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              )}
+            </article>
+          );
+        })}
+
+        {!loading && opsOrdenadas.length === 0 && (
           <div className="text-center text-gray-500 py-6">Nenhuma OP para os filtros informados.</div>
         )}
       </section>

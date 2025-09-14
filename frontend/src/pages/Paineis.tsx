@@ -2,6 +2,11 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
 import { defaultWindow, formatBR } from "../lib/date";
 import type { OpDTO } from "../types/op";
+import { Progress } from "../components/Progress";
+
+/* -------------------- Persistência -------------------- */
+const AUTO_KEY = "gp:autoRefresh";                // '1' | '0'
+const FILTROS_KEY = "gp:paineis:filtros";         // JSON
 
 /* -------------------- Combobox de Status (AA/SS) -------------------- */
 const STATUS_OPTIONS = [
@@ -132,6 +137,30 @@ function calcProgress(op: OpDTO): number {
   return (1 - saldo / total) * 100;
 }
 
+function ts(d?: string | null): number {
+  if (!d) return Number.POSITIVE_INFINITY;
+  const t = Date.parse(d);
+  return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+}
+
+function daysUntil(d?: string | null): number | null {
+  if (!d) return null;
+  const target = new Date(d);
+  if (isNaN(+target)) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const diff = Math.round((+target - +today) / 86400000);
+  return diff;
+}
+
+function deadlineClass(validade?: string | null): string {
+  const days = daysUntil(validade);
+  if (days === null) return "";
+  if (days <= 3) return "border-red-300 bg-red-50";       // destaque forte
+  if (days <= 5) return "border-amber-300 bg-amber-50";   // destaque suave
+  return "";
+}
+
 /* ------------------------------ Tipos ---------------------------------- */
 type Filtros = {
   de: string;
@@ -141,25 +170,76 @@ type Filtros = {
   limit: number;
 };
 
-/* ------------------------------ Página --------------------------------- */
-export default function Paineis() {
+/* ---------------- helpers de persistência ---------------- */
+function loadPersisted(): {
+  filtros: Filtros;
+  statusCsv: string;
+  setorSel: string;
+  auto: boolean;
+} {
   const jan = defaultWindow();
-
-  const [filtros, setFiltros] = useState<Filtros>({
+  let filtros: Filtros = {
     de: jan.de,
     ate: jan.ate,
     filial: 1,
     incluirRoteiro: true,
     limit: 200,
-  });
+  };
+  let statusCsv = "AA,SS";
+  let setorSel = "";
+  try {
+    const raw = localStorage.getItem(FILTROS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      filtros = { ...filtros, ...parsed.filtros };
+      statusCsv = typeof parsed.statusCsv === "string" ? parsed.statusCsv : statusCsv;
+      setorSel = typeof parsed.setorSel === "string" ? parsed.setorSel : setorSel;
+    }
+  } catch {
+    /* ignore */
+  }
+  const auto = localStorage.getItem(AUTO_KEY) !== "0"; // default true
+  return { filtros, statusCsv, setorSel, auto };
+}
+
+/* ------------------------------ Página --------------------------------- */
+export default function Paineis() {
+  const persisted = loadPersisted();
+
+  const [filtros, setFiltros] = useState<Filtros>(persisted.filtros);
 
   // Multi-seleção de status (CSV): AA,SS
-  const [statusCsv, setStatusCsv] = useState<string>("AA,SS");
+  const [statusCsv, setStatusCsv] = useState<string>(persisted.statusCsv);
 
-  const [auto, setAuto] = useState(false);
+  // Filtro por setor (derivado do resultado): '' = Todos
+  const [setorSel, setSetorSel] = useState<string>(persisted.setorSel);
+
+  // Auto-refresh 15s com persistência
+  const [auto, setAuto] = useState<boolean>(persisted.auto);
+
   const [ops, setOps] = useState<OpDTO[]>([]);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // persistir mudanças relevantes
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        FILTROS_KEY,
+        JSON.stringify({ filtros, statusCsv, setorSel })
+      );
+    } catch {
+      /* ignore */
+    }
+  }, [filtros, statusCsv, setorSel]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(AUTO_KEY, auto ? "1" : "0");
+    } catch {
+      /* ignore */
+    }
+  }, [auto]);
 
   async function carregar() {
     try {
@@ -169,7 +249,7 @@ export default function Paineis() {
         de: filtros.de,
         ate: filtros.ate,
         filial: filtros.filial,
-        status: statusCsv, // << envia AA/SS conforme seleção
+        status: statusCsv,
         limit: filtros.limit,
         incluirRoteiro: filtros.incluirRoteiro ? 1 : 0,
       } as any;
@@ -193,7 +273,7 @@ export default function Paineis() {
     const id = setInterval(carregar, 15000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [auto, filtros, statusCsv]);
+  }, [auto, filtros, statusCsv, setorSel]);
 
   /* ---------------------------- KPIs ----------------------------------- */
   const kpis = useMemo(() => {
@@ -239,6 +319,62 @@ export default function Paineis() {
 
   const maxSetor = Math.max(1, ...kpis.porSetor.map((x) => x.qtde));
   const maxStatus = Math.max(1, ...kpis.porStatus.map((x) => x.qtde));
+
+  /* --------- Painel por Setor (derivado do resultado atual) ------------ */
+  const setoresDerivados = useMemo(() => {
+    const all = new Set<string>();
+    ops.forEach((op) => {
+      const s1 = op.setoresSelecionados ?? [];
+      const s2 = (op.roteiro ?? []).map((r) => r.setor);
+      [...s1, ...s2].forEach((s) => {
+        if (s && typeof s === "string") all.add(s.trim());
+      });
+    });
+    return Array.from(all).sort((a, b) => a.localeCompare(b, "pt-BR"));
+  }, [ops]);
+
+  const possuiSetor = (op: OpDTO, setor: string) => {
+    if (!setor) return true; // Todos
+    const alvo = setor.toLowerCase();
+    const s1 = (op.setoresSelecionados ?? []).some(
+      (s) => s?.toLowerCase() === alvo
+    );
+    const s2 = (op.roteiro ?? []).some((r) => r.setor?.toLowerCase() === alvo);
+    return s1 || s2;
+  };
+
+  const opsFiltradas = useMemo(
+    () => ops.filter((op) => possuiSetor(op, setorSel)),
+    [ops, setorSel]
+  );
+
+  // listas, sempre ordenadas por validade (asc)
+  const byVal = (a: OpDTO, b: OpDTO) =>
+    ts(a.datas?.validade) - ts(b.datas?.validade);
+
+  const filaAbertas = useMemo(
+    () =>
+      opsFiltradas
+        .filter(
+          (op) =>
+            (op.status ?? "").toString().toUpperCase().includes("ABERTA") ||
+            (op.status ?? "") === "AA"
+        )
+        .sort(byVal),
+    [opsFiltradas]
+  );
+
+  const emExecucao = useMemo(
+    () =>
+      opsFiltradas
+        .filter(
+          (op) =>
+            (op.status ?? "").toString().toUpperCase().includes("ENTRADA") ||
+            (op.status ?? "") === "SS"
+        )
+        .sort(byVal),
+    [opsFiltradas]
+  );
 
   /* ----------------------------- Render -------------------------------- */
   return (
@@ -359,49 +495,122 @@ export default function Paineis() {
         />
       </div>
 
-      {/* Barras por Status */}
-      <section className="bg-white rounded-xl border p-4">
-        <h3 className="font-medium mb-3">Distribuição por Status</h3>
-        <div className="space-y-2">
-          {kpis.porStatus.map((row) => (
-            <div key={row.status} className="flex items-center gap-3">
-              <div className="w-40 text-sm text-gray-700">{row.status}</div>
-              <div className="flex-1 h-3 bg-slate-100 rounded">
-                <div
-                  className="h-3 rounded bg-blue-600"
-                  style={{ width: `${(row.qtde / maxStatus) * 100}%` }}
-                  title={`${row.qtde} OPs`}
-                />
-              </div>
-              <div className="w-10 text-right text-sm">{row.qtde}</div>
-            </div>
-          ))}
-          {!kpis.porStatus.length && (
-            <div className="text-sm text-gray-500">Sem dados.</div>
-          )}
+      {/* Painel por Setor */}
+      <section className="bg-white rounded-xl border p-4 space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h3 className="font-medium">Painel por Setor</h3>
+            <p className="text-xs text-gray-500">
+              Filtra com base no roteiro/setores selecionados das OPs retornadas.
+            </p>
+          </div>
+          <div className="w-full sm:w-80">
+            <label className="label">Setor</label>
+            <select
+              className="select"
+              value={setorSel}
+              onChange={(e) => setSetorSel(e.target.value)}
+            >
+              <option value="">Todos</option>
+              {setoresDerivados.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-      </section>
 
-      {/* Barras por Setor */}
-      <section className="bg-white rounded-xl border p-4">
-        <h3 className="font-medium mb-3">Participação por Setor</h3>
-        <div className="space-y-2">
-          {kpis.porSetor.map((row) => (
-            <div key={row.setor} className="flex items-center gap-3">
-              <div className="w-40 text-sm text-gray-700">{row.setor}</div>
-              <div className="flex-1 h-3 bg-slate-100 rounded">
-                <div
-                  className="h-3 rounded bg-emerald-600"
-                  style={{ width: `${(row.qtde / maxSetor) * 100}%` }}
-                  title={`${row.qtde} OPs`}
-                />
-              </div>
-              <div className="w-10 text-right text-sm">{row.qtde}</div>
+        <div className="grid lg:grid-cols-2 gap-4">
+          {/* Fila - ABERTAS */}
+          <div className="rounded-xl border p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Fila (ABERTAS)</h4>
+              <span className="text-xs text-gray-500">{filaAbertas.length} OPs</span>
             </div>
-          ))}
-          {!kpis.porSetor.length && (
-            <div className="text-sm text-gray-500">Sem dados.</div>
-          )}
+            <div className="space-y-3">
+              {filaAbertas.map((op) => {
+                const hl = deadlineClass(op.datas?.validade);
+                return (
+                  <article key={op.numero} className={`rounded border p-3 ${hl}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          OP {op.numero}
+                          {op.descricao ? (
+                            <span
+                              className="ml-2 text-xs text-gray-600 max-w-[28rem] truncate inline-block align-middle"
+                              title={op.descricao}
+                            >
+                              {op.descricao}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Emissão: {formatBR(op.datas?.emissao)} • Prev. início:{" "}
+                          {formatBR(op.datas?.previsaoInicio)} • Validade:{" "}
+                          {formatBR(op.datas?.validade)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <Progress value={calcProgress(op)} />
+                    </div>
+                  </article>
+                );
+              })}
+              {!filaAbertas.length && (
+                <p className="text-sm text-gray-500">Sem OPs abertas para este setor.</p>
+              )}
+            </div>
+          </div>
+
+          {/* Em execução - ENTRADA PARCIAL */}
+          <div className="rounded-xl border p-4">
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="font-medium">Em execução (ENTRADA PARCIAL)</h4>
+              <span className="text-xs text-gray-500">{emExecucao.length} OPs</span>
+            </div>
+            <div className="space-y-3">
+              {emExecucao.map((op) => {
+                const hl = deadlineClass(op.datas?.validade);
+                return (
+                  <article key={op.numero} className={`rounded border p-3 ${hl}`}>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex-1">
+                        <div className="font-medium">
+                          OP {op.numero}
+                          {op.descricao ? (
+                            <span
+                              className="ml-2 text-xs text-gray-600 max-w-[28rem] truncate inline-block align-middle"
+                              title={op.descricao}
+                            >
+                              {op.descricao}
+                            </span>
+                          ) : null}
+                        </div>
+
+                        <div className="text-[11px] text-gray-500 mt-1">
+                          Emissão: {formatBR(op.datas?.emissao)} • Prev. início:{" "}
+                          {formatBR(op.datas?.previsaoInicio)} • Validade:{" "}
+                          {formatBR(op.datas?.validade)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-2">
+                      <Progress value={calcProgress(op)} />
+                    </div>
+                  </article>
+                );
+              })}
+              {!emExecucao.length && (
+                <p className="text-sm text-gray-500">Sem OPs em execução para este setor.</p>
+              )}
+            </div>
+          </div>
         </div>
       </section>
 
@@ -425,7 +634,10 @@ export default function Paineis() {
                 {kpis.atrasadas.map((op) => (
                   <tr key={op.numero} className="border-t">
                     <td className="py-2 pr-4 font-medium">OP {op.numero}</td>
-                    <td className="py-2 pr-4 max-w-[26rem] truncate" title={op.descricao ?? ""}>
+                    <td
+                      className="py-2 pr-4 max-w-[26rem] truncate"
+                      title={op.descricao ?? ""}
+                    >
                       {op.descricao ?? "—"}
                     </td>
                     <td className="py-2 pr-4">{op.status ?? "—"}</td>
