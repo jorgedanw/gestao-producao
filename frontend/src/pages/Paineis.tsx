@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { fetchOps } from "../lib/api";
-import { defaultWindow } from "../lib/date";
+import { defaultWindow, formatBR } from "../lib/date";
 import type { OpDTO } from "../types/op";
 
 /* -------------------- Combobox de Status (AA/SS) -------------------- */
@@ -414,6 +414,7 @@ export default function Paineis() {
               <thead>
                 <tr className="text-left text-gray-500">
                   <th className="py-2 pr-4">OP</th>
+                  <th className="py-2 pr-4">Descrição</th>
                   <th className="py-2 pr-4">Status</th>
                   <th className="py-2 pr-4">Validade</th>
                   <th className="py-2 pr-4">Progresso</th>
@@ -424,8 +425,11 @@ export default function Paineis() {
                 {kpis.atrasadas.map((op) => (
                   <tr key={op.numero} className="border-t">
                     <td className="py-2 pr-4 font-medium">OP {op.numero}</td>
+                    <td className="py-2 pr-4 max-w-[26rem] truncate" title={op.descricao ?? ""}>
+                      {op.descricao ?? "—"}
+                    </td>
                     <td className="py-2 pr-4">{op.status ?? "—"}</td>
-                    <td className="py-2 pr-4">{op.datas?.validade ?? "—"}</td>
+                    <td className="py-2 pr-4">{formatBR(op.datas?.validade)}</td>
                     <td className="py-2 pr-4">{toPct(calcProgress(op))}</td>
                     <td className="py-2 pr-4">
                       {(op.setoresSelecionados?.length
