@@ -1,0 +1,32 @@
+{
+  "6033": {
+    "porSetor": {
+      "Perfiladeira": {
+        "historico": [
+          {
+            "numero": 6033,
+            "setor": "Perfiladeira",
+            "operador": "jorge",
+            "iniciadoEm": "2025-09-16T02:04:29.002Z"
+          }
+        ],
+        "iniciado": "2025-09-16T02:04:29.002Z"
+      }
+    }
+  },
+  "6071": {
+    "porSetor": {
+      "Perfiladeira": {
+        "historico": [
+          {
+            "numero": 6071,
+            "setor": "Perfiladeira",
+            "operador": "jorge",
+            "iniciadoEm": "2025-09-16T02:04:23.684Z"
+          }
+        ],
+        "iniciado": "2025-09-16T02:04:23.684Z"
+      }
+    }
+  }
+}

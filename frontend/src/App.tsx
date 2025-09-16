@@ -2,6 +2,8 @@ import React from "react";
 import { Routes, Route, Link, NavLink } from "react-router-dom";
 import OpsListPage from "./pages/OpsList";
 import Paineis from "./pages/Paineis";
+import SetorPainel from "./pages/SetorPainel";
+import Expedicao from "./pages/setores/Expedicao";
 
 export default function App() {
   return (
@@ -65,6 +67,11 @@ export default function App() {
         <Routes>
           <Route path="/" element={<OpsListPage />} />
           <Route path="/paineis" element={<Paineis />} />
+          <Route path="/paineis/perfiladeira" element={<SetorPainel setor="Perfiladeira" />} />
+          <Route path="/paineis/serralheria" element={<SetorPainel setor="Serralheria" />} />
+          <Route path="/paineis/eixo" element={<SetorPainel setor="Eixo" />} />
+          <Route path="/paineis/pintura" element={<SetorPainel setor="Pintura" modo="pintura" />} />
+          <Route path="/paineis/expedicao" element={<Expedicao />} />
         </Routes>
       </main>
 

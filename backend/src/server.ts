@@ -3,7 +3,7 @@ import Fastify from "fastify";
 import cors from "@fastify/cors";
 import { registerOpsRoutes } from "./routes/ops.routes";
 import { registerIntegracaoRoutes } from "./routes/integracao.routes";
-
+import { registerApontamentosRoutes } from "./routes/apontamentos.routes";
 /**
  * Server Fastify
  * - CORS para o frontend
@@ -19,7 +19,7 @@ async function bootstrap() {
 
   await app.register(registerOpsRoutes, { prefix: "/" });
   await app.register(registerIntegracaoRoutes, { prefix: "/" });
-
+  await app.register(registerApontamentosRoutes, { prefix: "/" });
   const PORT = 3000;
   await app.listen({ port: PORT });
   console.log(`Server running on http://localhost:${PORT}`);

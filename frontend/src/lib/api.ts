@@ -65,3 +65,42 @@ export async function fetchOps(q: OpsQuery): Promise<OP[]> {
   }
   return parsed.data.data as OP[];
 }
+// === NOVOS helpers para apontamentos (não alteram o restante) ===
+export async function iniciarOp(numero: number, setor: string, operador: string) {
+  const r = await fetch(`http://localhost:3000/apontamentos/iniciar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ numero, setor, operador })
+  });
+  if (!r.ok) throw new Error("Falha ao iniciar OP");
+  return r.json();
+}
+
+export async function finalizarOp(
+  numero: number,
+  setor: string,
+  operador: string,
+  dados?: { m2?: number; obs?: string }
+) {
+  const r = await fetch(`http://localhost:3000/apontamentos/finalizar`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ numero, setor, operador, ...dados })
+  });
+  if (!r.ok) throw new Error("Falha ao finalizar OP");
+  return r.json();
+}
+
+export type ApontStatus = {
+  numero: number;
+  porSetor: Record<
+    string,
+    { iniciado?: string; finalizado?: string; m2?: number; historico?: any[] }
+  >;
+};
+export async function getApontStatus(numeros: number[]) {
+  const qs = new URLSearchParams({ numeros: numeros.join(",") });
+  const r = await fetch(`http://localhost:3000/apontamentos/status?${qs.toString()}`);
+  if (!r.ok) throw new Error("Falha ao buscar status de apontamentos");
+  return (await r.json()) as ApontStatus[];
+}
